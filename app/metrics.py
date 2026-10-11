@@ -16,6 +16,7 @@ api_calls = meter.create_counter("api_requests")
 api_duration = meter.create_histogram("api_request_duration", unit="s")
 source_calls = meter.create_counter("downstream_requests")
 source_duration = meter.create_histogram("downstream_request_duration", unit="s")
+lookup_results = meter.create_counter("lookup_results")
 
 
 def configure() -> None:
@@ -35,10 +36,11 @@ def configure() -> None:
         metric_readers=[PrometheusMetricReader()],
         views=views,
     ))
-    # A zero baseline lets Prometheus rate() include the first failure.
     for source in ("cvr", "statbank"):
         for outcome in ("success", "error", "not_found"):
             source_calls.add(0, {"source": source, "outcome": outcome})
+    for status in ("complete", "partial"):
+        lookup_results.add(0, {"status": status})
     _configured = True
 
 

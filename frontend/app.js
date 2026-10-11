@@ -8,6 +8,14 @@ const candidates = document.querySelector("#candidates");
 const matches = document.querySelector("#matches");
 const results = document.querySelector("#results");
 const numberFormat = new Intl.NumberFormat("da-DK", { maximumFractionDigits: 20 });
+const warnings = {
+  employees_unavailable: "Antal ansatte i virksomheden er ikke tilgængeligt.",
+  address_unavailable: "Virksomhedens adresse er ikke tilgængelig.",
+  industry_missing: "Virksomheden har ingen branchekode, så branchestatistik kan ikke hentes.",
+  statistics_timeout: "Branchestatistikken svarede ikke i tide. Prøv igen.",
+  statistics_unavailable: "Branchestatistikken er ikke tilgængelig for denne branchekode og dette år, eller datakilden kunne ikke levere et gyldigt svar.",
+  statistics_values_unavailable: "Nogle tal i branchestatistikken er ikke tilgængelige.",
+};
 
 function setBusy(busy) {
   form.setAttribute("aria-busy", String(busy));
@@ -23,23 +31,19 @@ function setStatus(message, error = false) {
 async function request(path) {
   let response;
   try {
-    response = await fetch(`/api${path}`, { cache: "no-store" });
+    response = await fetch("/api" + path, { cache: "no-store" });
   } catch {
     throw new Error("Der kunne ikke oprettes forbindelse til tjenesten. Prøv igen.");
   }
   const data = await response.json().catch(() => null);
+  if (response.status === 409 && Array.isArray(data?.candidates)) return data;
   if (!response.ok) {
     const errors = {
-      404: "Virksomheden blev ikke fundet.",
-      422: "Søgningen kunne ikke gennemføres. Kontrollér dine oplysninger, og prøv igen.",
-      502: "En datakilde er utilgængelig eller returnerede ugyldige data. Prøv igen.",
-      504: "En datakilde svarede ikke i tide. Prøv igen.",
+      404: "Ingen virksomhed blev fundet.",
+      422: "Kontrollér firmanavn, CVR-nummer og årstal, og prøv igen.",
+      502: "Virksomhedsoplysningerne kunne ikke hentes fra datakilden. Prøv igen.",
+      504: "Datakilden til virksomhedsoplysninger svarede ikke i tide. Prøv igen.",
     };
-    if (data?.detail === "No verified DB25 -> DB07 mapping for this company") {
-      errors[422] = "Branchestatistik understøttes endnu ikke for virksomhedens branche.";
-    } else if (data?.detail === "Company has no industry code") {
-      errors[422] = "Virksomheden har ingen branchekode, så branchestatistik kan ikke hentes.";
-    }
     throw new Error(errors[response.status] || "Søgningen kunne ikke gennemføres. Prøv igen.");
   }
   if (data === null) throw new Error("Svaret fra tjenesten kunne ikke læses. Prøv igen.");
@@ -59,43 +63,66 @@ function showDetails(id, rows) {
   }
 }
 
-async function enrich(cvr, year) {
+function showCandidates(companies) {
+  for (const company of companies) {
+    const row = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = company.name + " · CVR " + company.cvr + (company.status ? " · " + company.status : "");
+    button.addEventListener("click", () => lookup("/companies/" + encodeURIComponent(company.cvr) + "?year=" + yearInput.value));
+    row.append(button);
+    matches.append(row);
+  }
+  candidates.hidden = false;
+  setStatus("Flere virksomheder matcher. Vælg en virksomhed.");
+}
+
+function showResult(data) {
+  const company = data.company;
+  const statistics = data.industry_statistics ?? {};
+  document.querySelector("#company-title").textContent = company.name;
+  showDetails("#company-details", [
+    ["CVR-nummer", company.cvr],
+    ["Adresse", company.address],
+    ["Primær branche (DB25)", company.industry_code_db25],
+    ["Ansatte (senest indberettet)", company.employees],
+  ]);
+  document.querySelector("#statistics-title").textContent = "Branchestatistik · " + data.year;
+  showDetails("#statistics-details", [
+    ["Branche (DB07)", statistics.industry_code_db07],
+    ["Arbejdssteder ultimo november", statistics.workplaces],
+    ["Job ultimo november", statistics.jobs],
+    ["Fuldtidsbeskæftigede", statistics.full_time_employment],
+    ["Årlig lønsum (mio. kr.)", statistics.payroll_million_dkk],
+  ]);
+  const messages = data.warnings.map(code => warnings[code] || "Nogle oplysninger er ikke tilgængelige.");
+  document.querySelector("#result-notice").textContent = messages.join(" ");
+  results.hidden = false;
+  setStatus(data.status === "partial" ? "Virksomheden er fundet. Nogle oplysninger mangler." : "Virksomhedsoplysninger og branchestatistik er hentet.");
+  document.querySelector("#company-title").focus();
+}
+
+async function lookup(path) {
   if (!form.reportValidity()) return;
+  candidates.hidden = true;
   results.hidden = true;
+  matches.replaceChildren();
   setBusy(true);
   setStatus("Henter virksomhedsoplysninger og branchestatistik…");
   try {
-    const data = await request(`/companies/${encodeURIComponent(cvr)}?year=${encodeURIComponent(year)}`);
-    const company = data.company;
-    const statistics = data.industry_statistics;
-    document.querySelector("#company-title").textContent = company.name;
-    showDetails("#company-details", [
-      ["CVR-nummer", company.cvr],
-      ["Adresse", company.address],
-      ["Primær branche (DB25)", company.industry_code_db25],
-      ["Ansatte i virksomheden", company.employees],
-    ]);
-    document.querySelector("#statistics-title").textContent = `Branchestatistik · ${statistics.year}`;
-    showDetails("#statistics-details", [
-      ["Branche (DB07)", statistics.industry_code_db07],
-      ["Arbejdssteder", statistics.workplaces],
-      ["Job", statistics.jobs],
-      ["Fuldtidsbeskæftigede", statistics.full_time_employment],
-      ["Årlig lønsum (mio. kr.)", statistics.payroll_million_dkk],
-    ]);
-    candidates.hidden = true;
-    results.hidden = false;
-    setStatus("Virksomhedsoplysningerne er hentet.");
-    document.querySelector("#company-title").focus();
+    const data = await request(path);
+    if (data.candidates) showCandidates(data.candidates);
+    else showResult(data);
   } catch (error) {
     setStatus(error instanceof TypeError ? "Svaret fra tjenesten kunne ikke behandles. Prøv igen." : error.message, true);
   } finally {
     setBusy(false);
+    if (!candidates.hidden) matches.querySelector("button").focus();
   }
 }
 
 for (const [input, message] of [
-  [companyInput, "Indtast et firmanavn eller et CVR-nummer (mindst to tegn)."],
+  [companyInput, "Indtast et firmanavn på 2–200 tegn eller et CVR-nummer."],
   [yearInput, "Vælg et helt årstal mellem 2008 og 2024."],
 ]) {
   input.addEventListener("input", () => input.setCustomValidity(""));
@@ -103,42 +130,17 @@ for (const [input, message] of [
     if (!input.validity.customError) input.setCustomValidity(message);
   });
 }
+
 form.addEventListener("submit", async event => {
   event.preventDefault();
   const query = companyInput.value.trim();
-  const year = yearInput.value;
   const numeric = /^[0-9]+$/.test(query);
   if (query.length < 2 || (numeric && query.length !== 8)) {
     companyInput.setCustomValidity(numeric ? "Et CVR-nummer skal indeholde præcis 8 cifre." : "Indtast mindst to tegn.");
     companyInput.reportValidity();
     return;
   }
-  candidates.hidden = true;
-  results.hidden = true;
-  matches.replaceChildren();
-  if (numeric) {
-    await enrich(query, year);
-    return;
-  }
-  setBusy(true);
-  setStatus("Søger efter virksomheder…");
-  try {
-    const companies = await request(`/companies?${new URLSearchParams({ name: query })}`);
-    for (const company of companies) {
-      const row = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = `${company.name} · CVR ${company.cvr}${company.status ? ` · ${company.status}` : ""}`;
-      button.addEventListener("click", () => enrich(company.cvr, yearInput.value));
-      row.append(button);
-      matches.append(row);
-    }
-    candidates.hidden = companies.length === 0;
-    setStatus(companies.length ? "Vælg en virksomhed for at hente dens oplysninger." : "Ingen virksomheder fundet.");
-    if (companies.length) matches.querySelector("button").focus();
-  } catch (error) {
-    setStatus(error instanceof TypeError ? "Svaret fra tjenesten kunne ikke behandles. Prøv igen." : error.message, true);
-  } finally {
-    setBusy(false);
-  }
+  const path = numeric ? "/companies/" + query + "?year=" + yearInput.value :
+    "/companies?" + new URLSearchParams({ name: query, year: yearInput.value });
+  await lookup(path);
 });

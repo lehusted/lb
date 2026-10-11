@@ -10,12 +10,12 @@
 <body>
   <main>
     <h1>LB interview case</h1>
-    <p>Find en dansk virksomhed og statistik for dens branche.</p>
+    <p>Søg på virksomhed eller CVR-nummer.</p>
     <form id="lookup">
       <div class="field company-field">
         <label for="company">Firmanavn eller CVR-nummer</label>
-        <input id="company" name="company" type="text" required minlength="2"
-               placeholder="F.eks. Novo Nordisk eller 24256790" aria-describedby="lookup-status">
+        <input id="company" name="company" type="text" required minlength="2" maxlength="200"
+               placeholder="F.eks. LB Forsikring eller 16500836" aria-describedby="lookup-status">
       </div>
       <div class="field">
         <label for="year">Statistikår</label>
@@ -29,14 +29,16 @@
       <ul id="matches"></ul>
     </section>
     <div id="results" hidden>
+      <p id="result-notice"></p>
       <section aria-labelledby="company-title">
         <h2 id="company-title" tabindex="-1"></h2>
-        <p>Aktuelle virksomhedsoplysninger fra CVR. Det valgte år gælder for branchestatistikken.</p>
+        <p>Aktuelle virksomhedsoplysninger fra CVR. Det valgte år gælder for branchestatistikken. Perioden for virksomhedens medarbejdertal er ikke oplyst af kilden.</p>
         <dl id="company-details"></dl>
       </section>
       <section aria-labelledby="statistics-title">
         <h2 id="statistics-title"></h2>
         <p>Tal for hele branchen fra Danmarks Statistik (ERHV1). Arbejdssteder er ikke juridiske virksomheder, og job er ikke unikke personer.</p>
+        <p>Statistikken vælges direkte med branchekoden fra CVR. CVR bruger DB25, mens ERHV1 bruger DB07. Brancheafgrænsningen kan derfor være forskellig.</p>
         <dl id="statistics-details"></dl>
       </section>
     </div>

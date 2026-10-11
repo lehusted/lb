@@ -1,194 +1,291 @@
 # LB interview case
 
+A small REST service that looks up a Danish company and adds industry statistics.
+The company information is current. The selected year applies to the statistics.
+
 ## Run
 
 Install Docker Desktop with Linux containers, then run:
 
-```bash
+~~~bash
 docker compose up --build
-```
-
-Internet access is needed for images, Python packages and the public data sources.
-One Compose file starts the frontend, FastAPI backend and Prometheus.
+~~~
 
 | URL | Purpose |
 | --- | --- |
-| http://localhost:8080 | LB interview case frontend (Danish) |
-| http://localhost:8000/docs | API documentation |
-| http://localhost:8000/health | Backend liveness |
-| http://localhost:8000/metrics | Prometheus exposition |
-| http://localhost:9090 | Prometheus UI |
+| http://localhost:8080 | Danish lookup page |
+| http://localhost:8000/docs | Interactive API documentation and response schemas |
+| http://localhost:8000/health | Application liveness |
+| http://localhost:8000/metrics | Prometheus metrics |
+| http://localhost:9090 | Prometheus query interface |
 
-All host ports bind to localhost. Stop with `Ctrl+C`, then `docker compose down`.
+Ports bind to localhost. Internet access is required for builds and public APIs.
+Stop with Ctrl+C, then run docker compose down.
 
-Enter a company name or an eight-digit CVR, select a statistics year (2008-2024),
-and click Søg. Name searches return candidates to select; a CVR fetches details
-directly. **Novo Nordisk, CVR 24256790, year 2024** is the verified demo.
-Other industries return an explicit error until their mappings are verified.
-Loading, empty results and request errors are displayed on the page.
+For local Python development, use Python 3.12 or later:
 
-The API can also be used directly. On PowerShell, use `curl.exe`:
-
-```bash
-curl "http://localhost:8000/companies?name=Novo%20Nordisk"
-curl "http://localhost:8000/companies/24256790?year=2024"
-```
-
-For Python development and the existing tests, use Python 3.12 or later:
-
-```bash
+~~~bash
 python -m venv .venv
 # Windows: .venv\Scripts\Activate.ps1
 # macOS/Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt
-pytest -q
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
-```
+~~~
 
-There is one Python dependency file, used by local development, Docker and CI.
-The frontend has no package dependencies or build step; Compose builds its image
-by copying static files into Nginx.
+## How a lookup works
 
-## API and data meaning
+1. Validate the CVR or search the company name.
+2. A unique name match supplies its CVR. Multiple matches require a selection.
+3. Fetch the current company name, address, industry code and employee count.
+4. Send that industry code and the selected year to ERHV1, as specified in the case.
+5. Return company data and statistics together. Explain anything unavailable.
 
-| Request | Result |
+Both lookup routes call the same enrich_company function in app/main.py.
+There is no database or saved company history.
+
+| File | What it does |
 | --- | --- |
-| `GET /companies?name=...` | Candidates with CVR, name and status; name requires at least two characters |
-| `GET /companies/{cvr_number}?year=2024` | Current company information plus industry statistics for the selected year |
-| `GET /health` | Liveness only; does not contact data sources |
-| `GET /metrics` | OpenTelemetry metrics in Prometheus format |
+| app/main.py | Routes, shared lookup flow, controlled errors and API timing |
+| app/cvr.py | Calls APICVR and selects/validates company fields |
+| app/statistics.py | Requests ERHV1 and validates/parses its Danish CSV |
+| app/models.py | Defines the JSON response shapes displayed in /docs |
+| app/metrics.py | Measures downstream calls and exports OpenTelemetry metrics |
+| frontend/app.js | Sends lookups and displays results or name candidates |
+| compose.yaml | Starts the API, static frontend and Prometheus |
 
-The frontend forwards `/api/...` to these backend routes. Name search requires
-choosing a company; ceased companies remain visible with their source status.
+## API examples
 
-- `company`: CVR, name, address, primary `industry_code_db25`, `employees`, and
-  `data_period: "current"`.
-- `industry_statistics`: year, `industry_code_db07`, `workplaces`, `jobs`,
-  `full_time_employment`, and `payroll_million_dkk`.
-- `mapping: "verified_csv"` identifies the verified classification allowlist.
+On PowerShell, use curl.exe. Both routes require an integer year from 2008 to 2024.
 
-Company information is **current**, not reconstructed for the historical year.
-ERHV1 values describe the **whole industry**: workplaces are not legal companies;
-jobs are positions at the end of November, not unique people or company headcount.
-Annual payroll is in millions of DKK. Missing values remain JSON `null` and appear
-as **Ikke tilgængelig** in the frontend; zero remains zero.
+~~~bash
+curl.exe "http://localhost:8000/companies/16500836?year=2024"
+curl.exe "http://localhost:8000/companies?name=LB%20forsikring&year=2024"
+curl.exe "http://localhost:8000/companies/24256790?year=2024"
+~~~
 
-### Verified classification mapping
+A unique name returns the same response shape as a CVR lookup:
 
-`data/db25_to_db07.csv` allows only the verified pharmaceutical preparations
-mapping **212000 -> 212000**. Equal code digits alone do not prove equivalence.
-No manual classification override is available.
+- year: the requested statistics year, retained even if statistics are unavailable.
+- status: complete when all requested values are available, otherwise partial.
+- company: CVR, name, address, industry_code_db25, employees, data_period and employees_period.
+- industry_statistics: year, industry_code_db07 and the four measures below, or null.
+- warnings: reason codes for unavailable information.
 
-Source: Statistics Denmark's [DB07/DB25 documentation](https://www.dst.dk/da/Statistik/dokumentation/dansk-branchekode-er-gaeldende)
-and [detailed correspondence workbook](https://www.dst.dk/ext/9884313386991/0/erhvervreg/DB07_DB25_noegle_brancher-%28xlsx%29--xlsx),
-updated 26 February 2026. Verification on 11 October 2026 checked `DB25-DB07`
-row 196, `DB07-DB25` row 191, and the unchanged-industry worksheet row 100.
-Both relationship counts are 1, with no inclusion/exclusion changes.
-Workbook SHA-256: `6e618cefb38106cc03606c504b8a8b9f4873a2c40454a8b6f25ca685f6eea04e`.
-Add mappings only after verifying correspondence in both directions.
+The name search is APICVR's prefix search, limited to 100 candidates. HTTP 409
+returns message and candidates (CVR, name, source status). Choose a CVR and
+request its details; the service never picks the first of several matches.
+Company lifecycle status is shown in candidates, including ceased companies.
+Names are trimmed before validating their length (2–200 characters). All input
+validation errors use FastAPI's documented HTTP 422 response with a detail array.
 
-ERHV1 is requested as Danish UTF-8 CSV with code-valued columns
-`BRANCHE07;TAL;TID;INDHOLD`. The parser validates industry, year, all four measures,
-duplicates, row widths and Danish numeric syntax. Unexpected payloads fail safely.
-
-| Scenario | HTTP status |
+| Situation | HTTP status / result |
 | --- | --- |
-| Invalid input, absent industry or unsupported mapping | 422 |
-| Company not found | 404 |
-| Data source HTTP failure or invalid payload | 502 |
-| Data source timeout | 504 |
+| Complete or partial company lookup | 200 |
+| No matching company / CVR not found | 404 |
+| Multiple name matches | 409 with candidates |
+| Invalid CVR, name or year | 422 |
+| APICVR failure or malformed response | 502 |
+| APICVR timeout | 504 |
+| Industry code missing, rejected by StatBank or statistics request failed | 200, partial; company retained and statistics null |
 
-Both integrations have finite 5-second HTTP timeouts per connect/read/write/pool
-operation, not a five-second total deadline. Errors expose controlled messages.
-
-## Architecture and Design Decisions
-
-```text
-Browser -> Nginx frontend -> /api/ -> FastAPI -> APICVR + ERHV1
-                                        |
-                                        +-> /metrics <- Prometheus
-```
-
-| Component | Responsibility / decision |
+| Warning code | Meaning |
 | --- | --- |
-| `frontend/index.html`, `styles.css`, `app.js` | One Danish page, native controls and browser fetch; no frontend framework |
-| `frontend/nginx.conf`, `Dockerfile` | Separate non-root static server; same-origin API proxy avoids CORS configuration |
-| `app/main.py` | Validation, orchestration, HTTP errors and API metrics |
-| `app/cvr.py`, `statistics.py`, `industry.py` | Data source requests, validated transformation and verified mapping |
-| `app/metrics.py` / OpenTelemetry | Counters and latency histograms exported directly to Prometheus |
-| Docker Compose | Three services in one runnable setup |
-| `requirements.txt` | One pinned dependency set, including pytest for existing checks |
+| employees_unavailable | APICVR did not supply the employee count |
+| address_unavailable | APICVR did not supply an address |
+| industry_missing | The company has no primary industry code |
+| statistics_timeout | StatBank timed out; retrying may help |
+| statistics_unavailable | StatBank rejected the code/year, failed or returned invalid data |
+| statistics_values_unavailable | Some ERHV1 values are missing or suppressed |
 
-One Uvicorn worker preserves the single-process metrics model. The backend runs
-as UID/GID 10001; Nginx also runs without root. Browser-rendered source values use
-`textContent`, not HTML interpolation. A content security policy allows only local
-resources, and responses disable browser caching. Frontend access logging is off
-to avoid recording lookup queries. Inputs have labels, keyboard access, visible
-focus, and announced loading/error states. The API remains the validation boundary.
+A missing value remains null; zero remains zero. The frontend displays
+"Ikke tilgængelig". Missing statistics never discard company information.
 
-No database, cache, message broker, frontend build tooling, tracing, Collector,
-Grafana or Kubernetes is needed for this lookup flow.
+## Data meaning and classification
+
+The case's wording was clarified with the user on 11 October 2026:
+
+- Use current company data plus industry statistics for the selected year.
+- Use the case's ERHV1 request and label its actual measures accurately.
+- Return a partial result when enrichment is unavailable.
+
+APICVR returns current name, address and primary industry. Its employee count
+is the latest reported monthly count, but its reporting period is not exposed.
+Therefore data_period is current and employees_period is null. Neither means
+that the employee count belongs to the selected statistics year.
+
+| JSON field | ERHV1 code | Meaning |
+| --- | --- | --- |
+| workplaces | ARBSTED | Workplaces at the end of November, not legal companies |
+| jobs | ANSATTE | Jobs at the end of November, not unique people |
+| full_time_employment | FULDBESK | Employment converted to full-time equivalents |
+| payroll_million_dkk | LØNSUM | Annual payroll in millions of DKK |
+
+These describe the whole industry, not the selected company.
+Source: [Statistics Denmark's definitions](https://www.dst.dk/da/Statistik/dokumentation/statistikdokumentation/arbejdssteder-og-job/indhold)
+and [APICVR's transformation](https://github.com/NoahBohme/apicvr.dk/blob/master/apis/searchcvr.py).
+
+The MVP follows the requested case flow: APICVR's industrycode is sent directly
+as BRANCHE07 in the ERHV1 POST body. There is no manually maintained conversion
+file or industry allowlist. The previous one-row mapping blocked almost every
+industry before the StatBank request and has been removed.
+
+CVR uses DB25; ERHV1 uses DB07. Direct code selection is a simplification, and
+equal digits do not establish equal industry scope. A complete response means
+all requested values were returned; it does not certify classification equivalence.
+The API documentation and frontend make this limitation explicit. Verify the
+classification correspondence before using these results for analytical comparisons.
+If StatBank rejects the code/year or returns no usable data, the company is
+retained with null statistics and a clear warning.
+
+Source: [DB25 guidance](https://www.dst.dk/da/Statistik/dokumentation/dansk-branchekode-er-gaeldende)
+and [ERHV1 documentation](https://www.dst.dk/en/Statistik/dokumentation/documentationofstatistics/workplaces-and-jobs/accessibility-and-clarity).
+
+The ERHV1 parser checks headers, industry, year, all four measures, duplicate
+rows and Danish numeric syntax. Invalid data counts as a downstream failure.
 
 ## Metrics
 
-Prometheus scrapes `http://app:8000/metrics` every five seconds.
-`up{job="lb-interview-case"}` should be `1`. Send requests and allow at least two
-scrapes before querying rates:
+OpenTelemetry exports directly to Prometheus. Prometheus scrapes every five seconds.
+There is one API worker, so counters describe one process and reset on restart.
 
-```promql
-# API P95, last five minutes
+After lookups and at least two scrapes, run these queries:
+
+~~~promql
+# Service P95 in seconds
 histogram_quantile(0.95, sum by (le) (rate(api_request_duration_seconds_bucket[5m])))
 
-# API 5xx fraction
-(sum(rate(api_requests_total{outcome="error"}[5m]))
- or (0 * sum(rate(api_requests_total[5m]))))
+# Service HTTP 5xx fraction
+sum(rate(api_requests_total{outcome="error"}[5m]))
 / sum(rate(api_requests_total[5m]))
 
-# P95 for each data source
+# P95 for each source: cvr and statbank
 histogram_quantile(0.95, sum by (source, le) (rate(downstream_request_duration_seconds_bucket[5m])))
 
-# Error fraction for each data source
-(sum by (source) (rate(downstream_requests_total{outcome="error"}[5m]))
- or on (source) (0 * sum by (source) (rate(downstream_requests_total[5m]))))
+# Failure fraction for each source
+sum by (source) (rate(downstream_requests_total{outcome="error"}[5m]))
 / sum by (source) (rate(downstream_requests_total[5m]))
-```
 
-Error fractions times 100 give percentages. P95 is a histogram estimate; buckets
-range from 0.01 to 30 seconds plus infinity. Zero-request intervals have undefined
-rates. Labels contain route templates and sources, not CVRs or names. Health and
-metrics endpoints are excluded. Data source timing includes payload validation;
-invalid HTTP-200 payloads count as errors, while a CVR 404 is `not_found`.
+# Partial-result fraction among returned company results
+sum(rate(lookup_results_total{status="partial"}[5m]))
+/ sum(rate(lookup_results_total[5m]))
+~~~
 
-## Verification and CI
+Multiply fractions by 100 for percentages. No-traffic rates are undefined.
+P95 is a histogram estimate, not an exact percentile of stored requests.
+StatBank failures count as downstream errors even when the API returns partial HTTP 200.
+Partial results also include missing source fields and rejected industry codes.
+A company-not-found response is counted separately from downstream outages.
+Labels never contain names, CVRs or exception text.
 
-`pytest -q` runs 70 existing deterministic tests, including real OpenTelemetry
-export, validation, null handling, Danish numbers and controlled data source errors.
-Company fixtures are synthetic; the ERHV1 fixture contains only public aggregate
-statistics. No personal CVR responses are stored in the repository.
+The health endpoint checks application liveness only. Downstream metrics measure
+actual requests and payload validation; they do not actively probe idle sources.
 
-Verified on 11 October 2026: all 70 tests passed on Windows and inside the normal
-Linux image. Both online Docker builds and the three-service Compose startup
-succeeded. Live CVR lookup, name search and candidate selection worked through the
-frontend; Nginx configuration, proxy headers and Prometheus scraping passed.
-The mobile page had no horizontal overflow at 390 pixels, and the automated
-accessibility audit scored 100. These checks do not guarantee public API availability.
+## Architecture and Design Decisions
 
-GitHub Actions installs `requirements.txt`, runs the tests and builds both images
-with Compose. Successful pushes to `main` publish the backend image to GHCR with
-`latest` and commit-SHA tags. Only that job has package write permission. The
-frontend image is built locally by Compose. GitHub Actions/GHCR execution and
-public repository publication have not been verified or performed here.
+~~~text
+Browser -> Nginx -> FastAPI -> APICVR -> StatBank
+                      |
+                      +-> /metrics <- Prometheus
+~~~
+
+- Python, FastAPI and httpx keep the request flow direct.
+- Two routes share one lookup function; there are no service or repository layers.
+- Pydantic response models make the contract visible in the existing FastAPI docs.
+- Name searches use APICVR's query endpoint so names containing `/` are supported.
+  Pydantic trims names and validates their length using the standard HTTP 422 format.
+- Address components are trimmed and blanks omitted; an entirely missing address
+  remains null and produces an address_unavailable warning.
+- The CVR industry code goes directly into the case's ERHV1 request. This removes
+  the one-row conversion restriction; differing classification scopes remain an explicit limitation.
+- A simple partial response keeps valid company data when statistics are unavailable.
+- No database, cache, tracing, Collector, Grafana or Kubernetes is needed.
+- Each downstream request has finite five-second connect/read/write/pool timeouts.
+  This is not a five-second total deadline. There are no automatic retries.
+- The static frontend needs no framework, package dependencies or build step.
+- Containers run without root. The frontend uses textContent and a local-only CSP.
+  Inputs are validated by the API, and error messages do not expose raw responses.
+- Three parameterized test functions share one HTTP mock setup in tests/test_cases.py.
+  They exercise both routes without external API calls; pytest is a development dependency.
+
+## Verification, CI and remaining delivery work
+
+The original failure was in enrichment: a one-row conversion list blocked
+almost all industries, initially causing HTTP 422 and later null statistics. Name lookup
+also returned candidates without a combined company/statistics response. Both
+routes now share the lookup flow, and unavailable enrichment returns partial data.
+
+| Case requirement | Current coverage |
+| --- | --- |
+| Look up by CVR or name | Both supported; ambiguous names require a selection |
+| Company name, address, industry and employees | Returned together; unavailable fields remain null |
+| Company data for a given year | Agreed interpretation: current company data plus selected-year statistics |
+| Four industry measures in the same response | CVR code and selected year sent directly to ERHV1; values returned together or null with a reason |
+| REST or GraphQL API | REST with interactive documentation and response schemas |
+| Service and downstream P95/error rates | OpenTelemetry metrics scraped by Prometheus; partial results also measured |
+| Robust downstream handling | Controlled errors, finite timeouts, payload validation and partial statistics failures |
+| Automated tests | Focused regression coverage for temporal semantics, statistical measures, years and missing observations on both routes |
+| Docker delivery | API and frontend build and run through Compose with Prometheus |
+| CI build, test and image publication | Tests run before builds; publication configured but remote execution unverified |
+| Public repository and README | Existing repository is public; README covers running, examples and trade-offs |
+| Architecture discussion | The lookup walkthrough and design decisions explain the MVP |
+
+Local verification passed for Docker builds and health, both LB lookup routes,
+a complete Novo Nordisk result, ambiguous-name selection, invalid inputs,
+integration failure handling, browser rendering and the Prometheus queries.
+The direct-code flow returned all four 2024 measures for 651200, 212000 and
+701010. StatBank's rejection of 461890 produced a partial result with company
+data retained. Synthetic integration checks confirmed that both routes send
+the supplied code/year and preserve null, zero and decimal values.
+These are smoke checks, not performance benchmarks or a replacement unit suite.
+
+The old suite has been replaced with focused regression tests in tests/test_cases.py.
+All test data is synthetic, and external HTTP calls use httpx.MockTransport.
+Three parameterized functions cover current company versus historical statistics,
+the four measures and their units, zero/decimal preservation, both boundary years,
+invalid or missing years, exact-year forwarding, and empty/suppressed observations.
+Comments explaining each case are in Danish. These tests do not verify live sources
+or DB25-to-DB07 correspondence.
+
+Run from the repository root in the Python environment described above:
+
+~~~bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+~~~
+
+GitHub Actions runs the tests before building both Docker images. Pushes to main publish the
+backend to GHCR with latest and commit-SHA tags. Only the publishing job has
+package-write permission. Passing tests do not establish live integration or
+classification equivalence.
+
+The existing repository is public: https://github.com/lehusted/lb.
+Local changes are not automatically published. Actual CI/GHCR publication must
+be verified separately when delivering the finished case.
+
+Finish delivery in two steps:
+
+1. If further test coverage is requested, cover ambiguous names, unavailable company
+   employees, malformed CSV and both sources' failure paths using synthetic data.
+2. Publish the finished changes and verify the actual CI run and published image.
+
+Verified DB25-to-DB07 conversion is a separate improvement if exact industry
+comparability becomes required; it is outside the current direct-code flow.
+
+For the interview, demonstrate a CVR lookup, a unique name, ambiguous candidates
+and a partial result. Explain the five lookup steps above, the data interpretations,
+and how unit tests and deployment verification complete the case requirements.
 
 ## Known Challenges & Limitations
 
 | Challenge | Handling / remaining limit |
 | --- | --- |
-| Historical company information | Clearly labeled current data; historical reconstruction requires another source |
-| Company counts versus workplaces; people versus jobs | Preserve ERHV1 terminology; literal legal-company counts are not provided |
-| DB25/DB07 conversion | Only industry 212000 is verified; broader enrichment requires authoritative mappings |
-| Missing values | Display Ikke tilgængelig; never guess employee counts or replace null with zero |
-| Public data sources | Timeouts and outages can interrupt lookups; show controlled errors and expose metrics |
-| Statistics years | Only 2008-2024; recheck source availability before expanding |
-| Local demonstration | Localhost ports and non-root services; public hosting requires a separate security review |
-| Metrics lifecycle | One backend worker; application counters restart with the process |
-| Delivery | Internet is needed for normal builds; GitHub/GHCR execution remains unverified |
+| Historical company information | Current data is explicit; historical reconstruction is outside the agreed MVP |
+| Case terminology | ERHV1 supplies workplaces and jobs; these are labeled accurately |
+| Different industry classifications | CVR code queried directly in ERHV1; DB25/DB07 scope equivalence is not verified |
+| Employee reporting period | Not exposed by APICVR; employees_period remains null |
+| Missing/suppressed data | Preserve null and explain partial results; blank address components are omitted |
+| Public API failures | Finite timeouts; company retained on statistics failure; metrics expose degradation |
+| Statistics years | ERHV1 metadata checked on 11 October 2026: 2008–2024 |
+| Name searches | Query endpoint supports `/`; prefix matching; maximum 100 candidates; no arbitrary first-match selection |
+| Tests | Focused offline regression suite; classification, ambiguity and broader source-failure coverage remain outside this suite |
+| Deployment | Localhost demonstration; one worker; actual publication remains to be verified |

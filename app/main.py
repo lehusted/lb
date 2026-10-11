@@ -2,13 +2,22 @@
 
 from contextlib import asynccontextmanager
 from time import perf_counter
+from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
+from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import StringConstraints
 
 from . import cvr, metrics, statistics
-from .industry import to_db07
+from .models import AmbiguousName, ErrorResponse, LookupResult
+
+ERROR_RESPONSES = {
+    404: {"model": ErrorResponse, "description": "Company not found"},
+    502: {"model": ErrorResponse, "description": "CVR source failed or returned invalid data"},
+    504: {"model": ErrorResponse, "description": "CVR source timed out"},
+}
 
 
 @asynccontextmanager
@@ -22,7 +31,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="LB interview case", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="LB interview case", version="0.4.0", lifespan=lifespan)
 
 
 async def http_client():
@@ -67,38 +76,62 @@ def prometheus_metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@app.get("/companies")
-async def search(name: str = Query(min_length=2), client: httpx.AsyncClient = Depends(http_client)):
-    try:
-        return await cvr.search(client, name)
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-        raise upstream_error(exc, "CVR API") from exc
-
-
-@app.get("/companies/{cvr_number}")
-async def enrich(
-    cvr_number: str,
+@app.get("/companies", response_model=LookupResult,
+         responses={**ERROR_RESPONSES, 409: {"model": AmbiguousName}})
+async def lookup_by_name(
+    name: Annotated[
+        str, Query(), StringConstraints(strip_whitespace=True, min_length=2, max_length=200)
+    ],
     year: int = Query(ge=2008, le=2024),
     client: httpx.AsyncClient = Depends(http_client),
 ):
-    if not (cvr_number.isascii() and cvr_number.isdigit() and len(cvr_number) == 8):
-        raise HTTPException(422, detail="CVR number must be 8 digits")
+    try:
+        candidates = await cvr.search(client, name)
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise upstream_error(exc, "CVR API") from exc
+    if not candidates:
+        raise HTTPException(404, detail="No company matches this name")
+    if len(candidates) > 1:
+        return JSONResponse(status_code=409, content={
+            "message": "Multiple companies match; select a CVR number",
+            "candidates": candidates,
+        })
+    return await enrich_company(client, candidates[0]["cvr"], year)
+
+
+@app.get("/companies/{cvr_number}", response_model=LookupResult, responses=ERROR_RESPONSES)
+async def lookup_by_cvr(
+    cvr_number: str = Path(pattern=r"^[0-9]{8}$"),
+    year: int = Query(ge=2008, le=2024),
+    client: httpx.AsyncClient = Depends(http_client),
+):
+    return await enrich_company(client, cvr_number, year)
+
+
+async def enrich_company(client: httpx.AsyncClient, cvr_number: str, year: int) -> LookupResult:
+    """Both routes use this flow; failed statistics never discard company data."""
     try:
         company = await cvr.get_company(client, cvr_number)
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise upstream_error(exc, "CVR API") from exc
+    warnings = []
+    if company["employees"] is None:
+        warnings.append("employees_unavailable")
+    if company["address"] is None:
+        warnings.append("address_unavailable")
     industry_code = company["industry_code_db25"]
+    industry_stats = None
     if industry_code is None:
-        raise HTTPException(422, detail="Company has no industry code")
-    mapped = to_db07(industry_code)
-    if mapped is None:
-        raise HTTPException(422, detail="No verified DB25 -> DB07 mapping for this company")
-    try:
-        industry_stats = await statistics.fetch(client, mapped, year)
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-        raise upstream_error(exc, "Statistics Denmark") from exc
-    return {
-        "company": company,
-        "industry_statistics": industry_stats,
-        "mapping": "verified_csv",
-    }
+        warnings.append("industry_missing")
+    else:
+        try:
+            industry_stats = await statistics.fetch(client, industry_code, year)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            warnings.append("statistics_timeout" if isinstance(exc, httpx.TimeoutException)
+                            else "statistics_unavailable")
+        if industry_stats is not None and any(industry_stats[key] is None for key in statistics.FIELDS.values()):
+            warnings.append("statistics_values_unavailable")
+    result = LookupResult(year=year, status="partial" if warnings else "complete",
+                          company=company, industry_statistics=industry_stats, warnings=warnings)
+    metrics.lookup_results.add(1, {"status": result.status})
+    return result

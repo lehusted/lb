@@ -1,7 +1,5 @@
 """Integration with the CVR public API."""
 
-from urllib.parse import quote
-
 from .metrics import measured_request
 
 BASE = "https://apicvr.dk/api/v1"
@@ -17,7 +15,7 @@ async def get_company(client, cvr: str) -> dict:
 
 async def search(client, name: str) -> list[dict]:
     async with measured_request(
-        client, "GET", f"{BASE}/search/company/{quote(name, safe='')}", "cvr"
+        client, "GET", f"{BASE}/search", "cvr", params={"name": name}
     ) as response:
         data = response.json()
         if not isinstance(data, list):
@@ -49,10 +47,11 @@ def company_fields(raw: dict) -> dict:
     address = (raw.get("address"), raw.get("zipcode"), raw.get("city"))
     if any(value is not None and type(value) not in (str, int) for value in address):
         raise ValueError("Invalid CVR address")
+    address = [str(value).strip() for value in address if value is not None]
     return {
         "cvr": vat,
         "name": name,
-        "address": ", ".join(str(v) for v in address if v is not None),
+        "address": ", ".join(value for value in address if value) or None,
         "industry_code_db25": code,
         "employees": employees,
         "data_period": "current",
