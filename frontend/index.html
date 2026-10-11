@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LB interview case</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>LB interview case</h1>
+    <p>Find en dansk virksomhed og statistik for dens branche.</p>
+    <form id="lookup">
+      <div class="field company-field">
+        <label for="company">Firmanavn eller CVR-nummer</label>
+        <input id="company" name="company" type="text" required minlength="2"
+               placeholder="F.eks. Novo Nordisk eller 24256790" aria-describedby="lookup-status">
+      </div>
+      <div class="field">
+        <label for="year">Statistikår</label>
+        <input id="year" name="year" type="number" min="2008" max="2024" value="2024" required>
+      </div>
+      <button type="submit">Søg</button>
+    </form>
+    <p id="lookup-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+    <section id="candidates" aria-labelledby="candidates-title" hidden>
+      <h2 id="candidates-title">Virksomheder, der matcher søgningen</h2>
+      <ul id="matches"></ul>
+    </section>
+    <div id="results" hidden>
+      <section aria-labelledby="company-title">
+        <h2 id="company-title" tabindex="-1"></h2>
+        <p>Aktuelle virksomhedsoplysninger fra CVR. Det valgte år gælder for branchestatistikken.</p>
+        <dl id="company-details"></dl>
+      </section>
+      <section aria-labelledby="statistics-title">
+        <h2 id="statistics-title"></h2>
+        <p>Tal for hele branchen fra Danmarks Statistik (ERHV1). Arbejdssteder er ikke juridiske virksomheder, og job er ikke unikke personer.</p>
+        <dl id="statistics-details"></dl>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
