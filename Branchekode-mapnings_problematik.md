@@ -1,4 +1,4 @@
-# CH-03: DB25 vs. DB07 – IBM Danmark
+# CH-03: DB25 vs. DB07 – IBM Danmark (eksempel på manglende branchekode mapning)
 
 CVR-opslaget for **IBM DANMARK ApS (CVR 65305216)** returnerer branchekode
 **622000** i klassifikationen **DB25**. Branchestatistikken for 2024 hentes fra
