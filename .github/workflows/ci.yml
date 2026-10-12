@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip install -r requirements.txt pytest==8.4.1
       - run: python -m pytest -q
       - run: docker compose build
 

@@ -20,6 +20,7 @@ Svaret har `status: complete` eller `partial`. Manglende oplysninger bevares som
 - **Drift:** Docker Compose starter API, frontend og Prometheus. API og frontend kører uden root; porte bindes til localhost.
 - **Målinger:** OpenTelemetry eksporterer direkte til Prometheus. Ingen tracing eller Collector.
 - **Data:** Ingen database eller cache. Hvert opslag henter data fra de eksterne kilder.
+- **Teststrategi:** Fem kernescenarier giver seks testkørsler med syntetiske HTTP-svar. De afprøver den rigtige parsing, branchemapning, sammenlægning og API-kontrakt. To live integrationstests kontrollerer CVR og DST hver for sig og vælges eksplicit, så den daglige testkørsel og CI er uafhængige af datakildernes tilgængelighed.
 - **Branchekorrespondance:** `app/industry.py` ejer valget af DB07-kilder og sammenlægningen af deres tal. Modulet indlæser de officielle relationer fra `app/data/industry_correspondence.json` ved opstart. En gammel branche må kun indgå, hvis hele dens aktivitet overgår til den valgte DB25-kode. `app/statistics.py` henter og validerer de valgte kilder i ét HTTP-kald. JSON-filen er projektets eneste lokale branchedatafil; den indeholder også kildeadresse, dato og SHA-256. [Branchemapning](Branchekode-mapnings_problematik.md) forklarer den aktuelle funktionalitet.
 
 ## Start projektet
@@ -68,14 +69,32 @@ API-version 0.5.0 bruger `industry_statistics.industry_codes_db07` som en liste 
 
 Prometheus henter metrics hvert femte sekund. API og datakilder måles med kaldtællere og varighedshistogrammer til fejlrater og estimeret P95. Delvise svar tælles særskilt; statistikfejl registreres som kildefejl, selv når API'et svarer 200. En udeladt forespørgsel på grund af branchekorrespondancen registreres som et delvist resultat, ikke som en fejlet kilde-request. `/health` kontrollerer kun applikationen.
 
-Eksisterende regressionstest bruger syntetiske data og simulerede HTTP-svar. Kør dem i et Python 3.12-miljø:
+Kør kernelogikkens tests i et Python 3.12-miljø:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt pytest==8.4.1
 python -m pytest -q
 ```
 
-GitHub Actions er konfigureret til at køre test og bygge begge Docker-images ved push og pull requests. Efter et bestået build ved push til `main` publiceres backend-imaget til GHCR med `latest` og commit-SHA som tags.
+`tests/test_cases.py` dækker følgende scenarier med seks testkørsler uden netværksadgang:
+
+| Scenarie | Kontrol |
+| --- | --- |
+| Succesfuldt navneopslag | Ét match, aktuelle virksomhedsdata, valgt statistikår, dokumenterede DB07-kilder og korrekte summer med nul og danske decimaler |
+| Manglende værdier | Medarbejdertal og en sum med en undertrykt kildeværdi bevares som `null`; øvrige tal bevares |
+| Delvis branchekorrespondance | Virksomhedsdata bevares; statistik udelades med en forklaring og uden DST-kald |
+| Timeout hos CVR og DST | To testkørsler: CVR giver 504; DST giver 200 med delvist svar og bevarede virksomhedsdata |
+| Ugyldigt årstal | 422 før eksterne kald |
+
+Kør de to live integrationstests før demo og ved ændringer i integrationerne:
+
+```bash
+python -m pytest -q -m integration
+```
+
+`tests/test_integrations.py` henter en kendt juridisk virksomhed fra CVR og DB07-brancherne `620200` og `620300` for 2024 fra DST. Testene kontrollerer gyldige normaliserede svar og brugbare statistikværdier frem for faste aktuelle virksomhedsoplysninger eller statistikværdier. CVR-svar gemmes ikke som fixtures. Kilde- og netværksfejl får disse tests til at fejle.
+
+`pytest.ini` udelader live tests som standard. GitHub Actions kører de seks tests uden netværksadgang og bygger begge Docker-images ved push og pull requests. Efter et bestået build ved push til `main` publiceres backend-imaget til GHCR med `latest` og commit-SHA som tags.
 
 ## Kendte problemer og begrænsninger
 
@@ -84,4 +103,4 @@ GitHub Actions er konfigureret til at køre test og bygge begge Docker-images ve
 - **Tidsperioder:** Årsvalget gælder kun statistikken. Virksomhedsdata er aktuelle; medarbejdertallets periode oplyses ikke (`employees_period: null`). Historiske virksomhedsdata understøttes ikke, da det ikke pålideligt kan findes inden for relevante tid (man vil nok godt kunne transformere sig frem via data fra diverse kilder, men det er ikke tiden værd for nu).
 - **År og navnesøgning:** API'et accepterer kun 2008–2024. Søgningens match og resultater afhænger af APICVR. Dette primært fordi, at Statistikbanken ikke indeholder data for alle år. `ERHV1` indeholder kun til og med 2024.
 - **Kildeafhængighed:** Eksterne kald har fem sekunders timeout pr. forbindelses-, læse-, skrive- og puljeoperation, ikke en samlet deadline. Ingen automatiske genforsøg.
-- **Drift og test:** Lokal demo med én API-worker; metrics nulstilles ved genstart. De eksisterende tests dækker udvalgte scenarier. Branchekonvertering og sammenlægning verificeres også med integrations-smokechecks; der er ingen permanente automatiske tests af disse nye tilfælde. Publicering dækkes ikke af testene.
+- **Drift og test:** Lokal demo med én API-worker; metrics nulstilles ved genstart. Teststrategien dækker udvalgte kernescenarier og to live integrationer. Øvrige fejl- og valideringsvarianter samt hele branchekataloget er ikke automatisk dækket. Frontend, kandidatvalg ved flere navnematch og metrics kontrolleres manuelt før demo. Publicering dækkes ikke af testene.
