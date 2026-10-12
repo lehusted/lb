@@ -12,6 +12,8 @@ const warnings = {
   employees_unavailable: "Antal ansatte i virksomheden er ikke tilgængeligt.",
   address_unavailable: "Virksomhedens adresse er ikke tilgængelig.",
   industry_missing: "Virksomheden har ingen branchekode, så branchestatistik kan ikke hentes.",
+  industry_mapping_unknown: "Der findes ingen dokumenteret DB25/DB07-korrespondance for virksomhedens branchekode. Branchestatistik er derfor ikke tilgængelig.",
+  industry_mapping_unsupported: "De gamle DB07-brancher svarer kun delvist til den aktuelle branche. Branchestatistikken er derfor udeladt.",
   statistics_timeout: "Branchestatistikken svarede ikke i tide. Prøv igen.",
   statistics_unavailable: "Branchestatistikken er ikke tilgængelig for denne branchekode og dette år, eller datakilden kunne ikke levere et gyldigt svar.",
   statistics_values_unavailable: "Nogle tal i branchestatistikken er ikke tilgængelige.",
@@ -80,6 +82,7 @@ function showCandidates(companies) {
 function showResult(data) {
   const company = data.company;
   const statistics = data.industry_statistics ?? {};
+  const sourceCodes = statistics.industry_codes_db07 ?? [];
   document.querySelector("#company-title").textContent = company.name;
   showDetails("#company-details", [
     ["CVR-nummer", company.cvr],
@@ -89,12 +92,13 @@ function showResult(data) {
   ]);
   document.querySelector("#statistics-title").textContent = "Branchestatistik · " + data.year;
   showDetails("#statistics-details", [
-    ["Branche (DB07)", statistics.industry_code_db07],
+    ["DB07-kilder", sourceCodes.length ? sourceCodes.join(", ") : null],
     ["Arbejdssteder ultimo november", statistics.workplaces],
     ["Job ultimo november", statistics.jobs],
     ["Fuldtidsbeskæftigede", statistics.full_time_employment],
     ["Årlig lønsum (mio. kr.)", statistics.payroll_million_dkk],
   ]);
+  document.querySelector("#industry-notice").hidden = sourceCodes.length < 2;
   const messages = data.warnings.map(code => warnings[code] || "Nogle oplysninger er ikke tilgængelige.");
   document.querySelector("#result-notice").textContent = messages.join(" ");
   results.hidden = false;

@@ -17,8 +17,9 @@ class Company(BaseModel):
 # IndustryStatistics er en klasse, der beskriver de statistiske data for en branche og sammensætter det med en virksomhed for et givent år
 class IndustryStatistics(BaseModel):
     year: int
-    industry_code_db07: str = Field(
-        description="ERHV1 code queried directly using the current CVR code; classification equivalence is not verified."
+    industry_codes_db07: list[str] = Field(
+        min_length=1,
+        description="Historical ERHV1 DB07 source branches selected using DST correspondence; multiple branches are summed."
     )
     workplaces: int | float | None = Field(description="Workplaces at the end of November, not companies.")
     jobs: int | float | None = Field(description="Jobs at the end of November, not unique people.")

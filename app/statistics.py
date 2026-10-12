@@ -51,7 +51,9 @@ def number(value: str) -> int | float | None:
     return result
 
 # Etablerer/sikrer, at responsen har den forventede struktur og konvertere CSV til JSON
-def parse_csv(text: str, db07: str, year: int) -> dict:
+def parse_csv(text: str, db07_codes: list[str], year: int) -> dict:
+    if not db07_codes or len(set(db07_codes)) != len(db07_codes):
+        raise ValueError("Expected unique DB07 codes")
     reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")), delimiter=";", strict=True)
     try:
         if len(reader.fieldnames or []) != 4 or set(reader.fieldnames) != {"BRANCHE07", "TAL", "TID", "INDHOLD"}:
@@ -60,35 +62,36 @@ def parse_csv(text: str, db07: str, year: int) -> dict:
     except csv.Error as exc:
         raise ValueError("Malformed ERHV1 CSV") from exc
     # Hoved proces blok - forbereder to strukturer: 'result' og 'found', og itererer over alle rækker i CSV'en for at validere og konvertere dataene
-    result = {name: None for name in FIELDS.values()}
+    result = {code: {name: None for name in FIELDS.values()} for code in db07_codes}
     found = set()
     for row in rows:
         if None in row or any(value is None for value in row.values()):
             raise ValueError("Incomplete ERHV1 CSV row")
-        if row["BRANCHE07"].split(" ", 1)[0] != db07 or row["TID"] != str(year):
+        code = row["BRANCHE07"].split(" ", 1)[0]
+        if code not in result or row["TID"] != str(year):
             raise ValueError("ERHV1 response does not match the requested industry/year")
         key = metric_name(row["TAL"])
         if key is None:
             raise ValueError("Unknown ERHV1 metric")
-        if key in found:
+        if (code, key) in found:
             raise ValueError("Duplicate ERHV1 metric")
-        found.add(key)
-        result[key] = number(row["INDHOLD"])
+        found.add((code, key))
+        result[code][key] = number(row["INDHOLD"])
     # Sidste validerings blok, der sikrer, at alle forventede metrikker er fundet i CSV'en, ellers laves der en fejl 
-    if found != set(FIELDS.values()):
+    if found != {(code, key) for code in db07_codes for key in FIELDS.values()}:
         raise ValueError("ERHV1 is missing requested metrics")
     return result
 
 # Entry-point til at hente data fra StatBank API'et, konvertere CSV til JSON og returnere det i det forventede format
-async def fetch(client, db07: str, year: int) -> dict:
+async def fetch(client, db07_codes: list[str], year: int) -> dict:
     payload = {
         "table": "ERHV1", "format": "CSV", "lang": "da", "valuePresentation": "Code",
         "variables": [
-            {"code": "BRANCHE07", "values": [db07]},
+            {"code": "BRANCHE07", "values": db07_codes},
             {"code": "TAL", "values": list(FIELDS)},
             {"code": "TID", "values": [str(year)]},
         ],
     }
     # Forbinder HTTP klienten med parser logik
     async with measured_request(client, "POST", URL, "statbank", json=payload) as response:
-        return {"year": year, "industry_code_db07": db07, **parse_csv(response.text, db07, year)}
+        return parse_csv(response.text, db07_codes, year)

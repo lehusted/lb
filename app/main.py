@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import StringConstraints
 
-from . import cvr, metrics, statistics
+from . import cvr, industry, metrics
 from .models import AmbiguousName, ErrorResponse, LookupResult
 
 # Fejlmeddelelser - herunder defininering og kontrakt
@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
 # Skaber FastAPI applikationen, definerer dens metadata og tilknytter livscyklus-håndteringen.
 app = FastAPI(
     title="LB interview case", 
-    version="0.4.0", 
+    version="0.5.0",
     lifespan=lifespan
     )
 
@@ -133,12 +133,11 @@ async def enrich_company(client: httpx.AsyncClient, cvr_number: str, year: int) 
         warnings.append("industry_missing")
     else:
         try:
-            industry_stats = await statistics.fetch(client, industry_code, year)
+            industry_stats, industry_warnings = await industry.fetch(client, industry_code, year)
+            warnings.extend(industry_warnings)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             warnings.append("statistics_timeout" if isinstance(exc, httpx.TimeoutException)
                             else "statistics_unavailable")
-        if industry_stats is not None and any(industry_stats[key] is None for key in statistics.FIELDS.values()):
-            warnings.append("statistics_values_unavailable")
             
     # Returnerer det samlede resultat - inklusiv virksomhedens data, branchestatistikker og eventuelle advarsler. Metrikkerne opdateres for at afspejle resultatets status (komplet eller delvis).
     result = LookupResult(year=year, status="partial" if warnings else "complete",

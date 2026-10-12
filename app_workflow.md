@@ -58,7 +58,9 @@ GET https://apicvr.dk/api/v1/12345678
 
 ## 4. FastAPI → Statistikbanken: branchestatistik
 
-**Request:** Branchekoden fra CVR bruges uændret som `BRANCHE07`; det valgte år sendes som `TID`.
+**Behandling før request:** `app/industry.py` finder dokumenterede DB07-kilder i den lokale korrespondance. I eksemplet har DB25 `212000` en verificeret 1:1-relation til DB07 `212000`. Alle koder kontrolleres, også når kodetallet er uændret. Ukendte koder og delvise korrespondancer giver et delvist svar med en forklaring uden at kontakte StatBank.
+
+**Request:** `app/statistics.py` sender de valgte kildekoder som `BRANCHE07` og det valgte år som `TID`. Flere kildekoder hentes i samme HTTP-kald.
 
 ```http
 POST https://api.statbank.dk/v1/data
@@ -86,7 +88,9 @@ BRANCHE07;TAL;TID;INDHOLD
 212000;LØNSUM;2024;1.234,5
 ```
 
-**Behandling:** Appen kontrollerer kolonner, branchekode, år og én række for hvert af de fire mål. Danske tal omdannes til JSON-tal (`1.234,5` → `1234.5`). `ARBSTED`, `ANSATTE`, `FULDBESK` og `LØNSUM` bliver henholdsvis `workplaces`, `jobs`, `full_time_employment` og `payroll_million_dkk` i trin 5.
+**Behandling:** `app/statistics.py` kontrollerer kolonner, kildekoder, år og præcis én række for hver kombination af kildekode og mål. Danske tal omdannes til JSON-tal (`1.234,5` → `1234.5`). `ARBSTED`, `ANSATTE`, `FULDBESK` og `LØNSUM` bliver henholdsvis `workplaces`, `jobs`, `full_time_employment` og `payroll_million_dkk`.
+
+`app/industry.py` sammenlægger de valgte kilders værdier for hvert mål. Hvis mindst én nødvendig værdi mangler, bliver summen for det mål `null`. Nul bevares som nul. I dette eksempel er der kun én kilde, så værdierne bevares. DB25 `622000` ville give ét opslag med DB07 `620200` og `620300`, hvis fulde branches tal må summeres. En gammel branche, der også overgår til andre DB25-koder, må ikke medtages som helhed.
 
 ## 5. FastAPI → Nginx → browser: samlet resultat
 
@@ -106,7 +110,7 @@ BRANCHE07;TAL;TID;INDHOLD
     "employees_period": null, "data_period": "current"
   },
   "industry_statistics": {
-    "year": 2024, "industry_code_db07": "212000",
+    "year": 2024, "industry_codes_db07": ["212000"],
     "workplaces": 50, "jobs": 1200,
     "full_time_employment": 1000.5, "payroll_million_dkk": 1234.5
   },
@@ -118,13 +122,13 @@ BRANCHE07;TAL;TID;INDHOLD
 
 **Input:** JSON-svaret fra trin 5 læses med `response.json()` og gives til `showResult()`.
 
-**Behandling:** Frontend skriver felterne med `textContent`, formaterer tal med `da-DK`, viser resultatet og aktiverer formularen igen. Navnet får fokus, og status bliver “Virksomhedsoplysninger og branchestatistik er hentet.”
+**Behandling:** Frontend skriver felterne med `textContent`, formaterer tal med `da-DK`, viser alle DB07-kilder og aktiverer formularen igen. Ved flere kilder vises også en forklaring på sammenlægningen. Navnet får fokus, og status bliver “Virksomhedsoplysninger og branchestatistik er hentet.”
 
 **Output:** Virksomhedsnavn, CVR, adresse, DB25-branchekode og 7 senest indberettede ansatte vises sammen med:
 
 | Branchestatistik · 2024 | Vist værdi |
 | --- | --- |
-| Branche (DB07) | 212000 |
+| DB07-kilder | 212000 |
 | Arbejdssteder ultimo november | 50 |
 | Job ultimo november | 1.200 |
 | Fuldtidsbeskæftigede | 1.000,5 |
