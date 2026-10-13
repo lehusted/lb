@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monitorering – LB interview case</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/monitorering.js" defer></script>
+</head>
+<body>
+  <main>
+    <nav aria-label="Navigation"><a href="/">Tilbage til virksomhedsopslag</a></nav>
+    <h1>Monitorering</h1>
+    <p>Opdateres automatisk cirka hvert femte sekund.</p>
+    <p id="monitoring-status" role="status" aria-live="polite" aria-atomic="true">Henter målinger…</p>
+    <p>Seneste opdatering af visningen: <span id="monitoring-updated">Endnu ikke opdateret</span></p>
+    <div class="metrics-table-wrap">
+      <table id="monitoring-metrics">
+        <caption>Målinger for de seneste fem minutter</caption>
+        <thead>
+          <tr><th scope="col">Område</th><th scope="col" aria-label="P95-responstid">P95<span class="metric-detail">-responstid</span></th><th scope="col">Fejlrate</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row" aria-label="API – virksomhedsopslag">API<span class="metric-detail"> – virksomhedsopslag</span></th><td id="api-p95">Ingen målinger</td><td id="api-errors">Ingen målinger</td></tr>
+          <tr><th scope="row">CVR</th><td id="cvr-p95">Ingen målinger</td><td id="cvr-errors">Ingen målinger</td></tr>
+          <tr><th scope="row">Statistikbanken</th><td id="statbank-p95">Ingen målinger</td><td id="statbank-errors">Ingen målinger</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>P95 er et estimat af den tid, som 95 % af kaldene ligger under. API-rækken samler begge opslagsruter, og API-fejlraten omfatter serverfejl.</p>
+    <p>CVR og Statistikbanken måles ved virksomhedsopslag. Manglende målinger betyder ikke, at en kilde er tilgængelig. En fejl hos Statistikbanken kan ses her, selv om opslaget returnerer et delvist svar.</p>
+    <noscript><p>Aktivér JavaScript for at se de automatisk opdaterede målinger.</p></noscript>
+  </main>
+</body>
+</html>

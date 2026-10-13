@@ -6,6 +6,8 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      prometheus:
+        condition: service_started
 
   app:
     build: .
